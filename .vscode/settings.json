@@ -1,0 +1,26 @@
+{
+    "idf.portWin": "COM5",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-bridge.cfg"
+    ],
+    "C_Cpp.errorSquiggles": "disabled",
+    "cmake.sourceDirectory": "D:/DA_TKLL/Code/YoloUNO_PlatformIO/lib/ArduinoJson/src",
+    "MicroPython.executeButton": [
+        {
+            "text": "▶",
+            "tooltip": "Run",
+            "alignment": "left",
+            "command": "extension.executeFile",
+            "priority": 3.5
+        }
+    ],
+    "MicroPython.syncButton": [
+        {
+            "text": "$(sync)",
+            "tooltip": "sync",
+            "alignment": "left",
+            "command": "extension.execute",
+            "priority": 4
+        }
+    ]
+}

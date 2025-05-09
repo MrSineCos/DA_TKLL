@@ -1,0 +1,5 @@
+Access https://circuitpython.org/board/yd_esp32_s3_n16r8/
+python -m esptool --chip auto --port COM8 chip_id
+python -m esptool --chip auto --port COM8 flash_id
+python -m esptool --port COM8 erase_flash
+python -m esptool --chip esp32s3 --port COM8 write_flash -z 0x0 firmware/adafruit-circuitpython-yd_esp32_s3_n16r8-en_US-9.2.4.bin
