@@ -33,8 +33,13 @@ constexpr uint16_t FIRMWARE_PACKET_SIZE = 4096U; // Giảm từ 4096 xuống 204
 // WiFi và ThingsBoard credentials
 const char *ssid = "Bonjour";
 const char *password = "hellosine";
-const char *TOKEN = "aInZbDDLhqg9PaTWZUYr";
+const char *TOKEN = "ZS9KjbmsPcXtniB8q9yP";
 const char *THINGSBOARD_SERVER = "app.coreiot.io";
+// const char *THINGSBOARD_SERVER = "thingsboard.cloud";
+// const char *Client_ID = "DA_TKLL";
+// const char *User_Name = "DA_TKLL";
+// const char *Password = "123456789";
+// const char *Device_id = "ff1ebc00-e693-11ef-87b5-21bccf7d29d5";
 
 #if ENCRYPTED
 constexpr uint16_t THINGSBOARD_PORT = 8883U;
@@ -52,6 +57,44 @@ constexpr uint32_t SENSOR_READ_INTERVAL = 5000U;                 // Xác định
 constexpr uint32_t WIFI_RECONNECT_DELAY = 5000U;                 // Thời gian chờ kết nối lại WiFi
 constexpr uint32_t TB_RECONNECT_DELAY = 5000U;                   // Thời gian chờ kết nối lại ThingsBoard
 constexpr uint32_t SERIAL_DEBUG_BAUD = 115200U;
+
+#if ENCRYPTED
+// See https://comodosslstore.com/resources/what-is-a-root-ca-certificate-and-how-do-i-download-it/
+// on how to get the root certificate of the server we want to communicate with,
+// this is needed to establish a secure connection and changes depending on the website.
+constexpr char ROOT_CERT[] = R"(-----BEGIN CERTIFICATE-----
+MIIFIzCCBAugAwIBAgISBUc/e8RVqNedBh84txQ1YAkeMA0GCSqGSIb3DQEBCwUA
+MDMxCzAJBgNVBAYTAlVTMRYwFAYDVQQKEw1MZXQncyBFbmNyeXB0MQwwCgYDVQQD
+EwNSMTEwHhcNMjUwNDA0MDYwMTAxWhcNMjUwNzAzMDYwMTAwWjAcMRowGAYDVQQD
+ExF0aGluZ3Nib2FyZC5jbG91ZDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC
+ggEBAJoxHcveQBtaeS+KbgNjl2+TzxRp/3rYmRYWJ82MlcdXY42+MzB0wF+GJLR3
+fMI1h6tzMDB/Y2UcVL4glCLaXAmDhzi7y/eJe8XS6Iozhz9Ww96+SjHxE5vrrmQk
+V3zG9pp60ah7G+CvhAR0o4rvg5UKKP7lFNJU44fhaB4m/FfXEnQ/hCbrDWf6qrwc
+rZK1P0MW4z3hhW+ZSmtxVAbdWSmqHQN4EkaWGZEd3ZU9xUswd96daicf1BpRYel4
+aTpcfhbAjTWQvf+LonbbUhmd2QhwQ38xaWPtUtcNPXMVHSNJ6BQp/n6VipNkrmU7
+2WrALRFUb5jYxmNmvT9LnnfNzcUCAwEAAaOCAkYwggJCMA4GA1UdDwEB/wQEAwIF
+oDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADAd
+BgNVHQ4EFgQUbFMcbSwAuwIexuiogNEguS305FkwHwYDVR0jBBgwFoAUxc9GpOr0
+w8B6bJXELbBeki8m47kwVwYIKwYBBQUHAQEESzBJMCIGCCsGAQUFBzABhhZodHRw
+Oi8vcjExLm8ubGVuY3Iub3JnMCMGCCsGAQUFBzAChhdodHRwOi8vcjExLmkubGVu
+Y3Iub3JnLzAcBgNVHREEFTATghF0aGluZ3Nib2FyZC5jbG91ZDATBgNVHSAEDDAK
+MAgGBmeBDAECATAuBgNVHR8EJzAlMCOgIaAfhh1odHRwOi8vcjExLmMubGVuY3Iu
+b3JnLzMxLmNybDCCAQUGCisGAQQB1nkCBAIEgfYEgfMA8QB2AMz7D2qFcQll/pWb
+U87psnwi6YVcDZeNtql+VMD+TA2wAAABlf+Y/qIAAAQDAEcwRQIgQgJDd+WdGFy+
+qIJ1LE4sFB98ncU9FNiS0o5MEOdWatMCIQCQZKkhmLJqgJLOpLyRqIrx7q1vV038
+NSA6lQDFRjQrrgB3AN3cyjSV1+EWBeeVMvrHn/g9HFDf2wA6FBJ2Ciysu8gqAAAB
+lf+Y/osAAAQDAEgwRgIhAMZ57uTJQqx5i/P1cxz6VX39ygT0CV/B4QFQPUAT7oVf
+AiEAiOYLQaY+Cg+fnCBRtFx+UH4q2TKe3p6YRI5poNBu8mkwDQYJKoZIhvcNAQEL
+BQADggEBALEWATKmmnDzEfMs8vjrGuSIkzV48ESv56qfCs76C+tH70HVn14MkeAU
+lm6kyPZVYAiXK0g1OxjpxZAiLcdBE/2tVl8HNWUCcHyz2vHa9dwVgXx5qUE7j9HH
+VpuQzfK/T7preDgx241ts46H/NlpI4ne0YNyQfajq3oQETVElH3b52Ccp0QuK937
+OP2ERR7/FQC8fqfxpuVpio9c+8iCzUOUyKfCGhtOBClAC35CI1f+zv1ECmfTja9K
+GdXYRZF0lUVUws03dE530AOt9Z951SvXACwbPsqo5XZwANkSrOs0lKuFGMrHVGpc
+/1Rp/v2NOIaXdRFre4wg9RXjltl/8TY=
+-----END CERTIFICATE-----
+)";
+#endif
+
 
 // Khởi tạo clients
 #if ENCRYPTED
@@ -86,7 +129,7 @@ SemaphoreHandle_t serialMutex = NULL;
 SemaphoreHandle_t tbMutex = NULL; // Thêm mutex cho ThingsBoard
 TaskHandle_t ThingsBoard_Task_Handle = NULL;
 TaskHandle_t Sensor_Task_Handle = NULL;
-
+TaskHandle_t Automation_Task_Handle = NULL;
 // Status flags
 bool currentFWSent = false;
 bool updateRequestSent = false;
@@ -377,6 +420,7 @@ void update_starting_callback()
   if (Sensor_Task_Handle != NULL)
   {
     vTaskSuspend(Sensor_Task_Handle);
+    vTaskSuspend(Automation_Task_Handle);
   }
 
   // Hủy đăng ký RPC để tránh nhận RPC call trong quá trình OTA
@@ -702,6 +746,10 @@ void ThingsBoard_Task(void *pvParameters)
   }
 }
 
+void task_automation(void *pvParameters)
+{
+}
+
 void setup()
 {
   // Khởi tạo Serial cho debug
@@ -737,6 +785,7 @@ void setup()
 
   // Tạo task cho ThingsBoard
   xTaskCreate(Sensor_Task, "SensorTask", 4096, NULL, 1, &Sensor_Task_Handle);
+  xTaskCreate(task_automation, "AutomationTask", 4096, NULL, 1, &Automation_Task_Handle);
   xTaskCreate(ThingsBoard_Task, "TBTask", 8192, NULL, 1, &ThingsBoard_Task_Handle);
   // Đảm bảo task được tạo thành công
   if (ThingsBoard_Task_Handle == NULL || Sensor_Task_Handle == NULL)
