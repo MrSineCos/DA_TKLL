@@ -23,7 +23,7 @@ constexpr uint16_t FIRMWARE_PACKET_SIZE = 4096U; // Giảm từ 4096 xuống 204
 
 // GPIO pin definitions
 #define DHT_PIN GPIO_NUM_6
-#define LIGHT_PIN GPIO_NUM_48
+#define LIGHT_PIN 18
 #define FAN_PIN GPIO_NUM_47
 #define LIGHT_SENSOR_PIN GPIO_NUM_4
 #define RXD2 38
@@ -33,7 +33,7 @@ constexpr uint16_t FIRMWARE_PACKET_SIZE = 4096U; // Giảm từ 4096 xuống 204
 // WiFi và ThingsBoard credentials
 const char *ssid = "Bonjour";
 const char *password = "hellosine";
-const char *TOKEN = "ZS9KjbmsPcXtniB8q9yP";
+const char *TOKEN = "22o1nfbfv24b9x1oq4ie";
 const char *THINGSBOARD_SERVER = "app.coreiot.io";
 // const char *THINGSBOARD_SERVER = "thingsboard.cloud";
 // const char *Client_ID = "DA_TKLL";
@@ -49,19 +49,20 @@ constexpr uint16_t THINGSBOARD_PORT = 1883U;
 
 // Các thông số cấu hình
 constexpr uint16_t MAX_MESSAGE_SIZE = 256U; // Giảm từ 512 xuống 256
-constexpr size_t MAX_ATTRIBUTES = 2U;
+constexpr size_t MAX_ATTRIBUTES = 7U;
+constexpr size_t MAX_ATTRIBUTES_REQUEST = 5U;                    // Giảm từ 3 xuống 2
 constexpr uint64_t REQUEST_TIMEOUT_MICROSECONDS = 3000U * 1000U; // Giảm từ 5000 xuống 3000
 constexpr int16_t TELEMETRY_SEND_INTERVAL = 10000U;              // Tăng từ 5000 lên 10000 để giảm tần suất gửi dữ liệu
 constexpr uint32_t OTA_CHECK_INTERVAL = 60000U;                  // Tăng từ 30000 lên 60000
+constexpr uint32_t AUTOLIGHT_CHECK_INTERVAL = 15000U;            // Tăng từ 5000 lên 10000 để giảm tần suất gửi dữ liệu
+constexpr uint32_t SCHEDULE_CHECK_INTERVAL = 15000U;                // Tăng từ 5000 lên 10000 để giảm tần suất gửi dữ liệu
 constexpr uint32_t SENSOR_READ_INTERVAL = 5000U;                 // Xác định rõ khoảng thời gian đọc cảm biến
+constexpr uint32_t LIGHT_AUTO_INTERVAL = 2000U;                  // Tăng từ 10000 lên 30000 để giảm tần suất gửi dữ liệu
 constexpr uint32_t WIFI_RECONNECT_DELAY = 5000U;                 // Thời gian chờ kết nối lại WiFi
 constexpr uint32_t TB_RECONNECT_DELAY = 5000U;                   // Thời gian chờ kết nối lại ThingsBoard
 constexpr uint32_t SERIAL_DEBUG_BAUD = 115200U;
 
 #if ENCRYPTED
-// See https://comodosslstore.com/resources/what-is-a-root-ca-certificate-and-how-do-i-download-it/
-// on how to get the root certificate of the server we want to communicate with,
-// this is needed to establish a secure connection and changes depending on the website.
 constexpr char ROOT_CERT[] = R"(-----BEGIN CERTIFICATE-----
 MIIFIzCCBAugAwIBAgISBUc/e8RVqNedBh84txQ1YAkeMA0GCSqGSIb3DQEBCwUA
 MDMxCzAJBgNVBAYTAlVTMRYwFAYDVQQKEw1MZXQncyBFbmNyeXB0MQwwCgYDVQQD
@@ -95,7 +96,6 @@ GdXYRZF0lUVUws03dE530AOt9Z951SvXACwbPsqo5XZwANkSrOs0lKuFGMrHVGpc
 )";
 #endif
 
-
 // Khởi tạo clients
 #if ENCRYPTED
 WiFiClientSecure espClient;
@@ -106,7 +106,7 @@ Arduino_MQTT_Client mqttClient(espClient);
 
 // Khởi tạo các API
 Server_Side_RPC<2U, 3U> rpc; // Giảm từ 3U, 5U xuống 2U, 3U để tiết kiệm bộ nhớ
-Attribute_Request<2U, MAX_ATTRIBUTES> attr_request;
+Attribute_Request<2U, MAX_ATTRIBUTES_REQUEST> attr_request;
 Shared_Attribute_Update<2U, MAX_ATTRIBUTES> shared_update; // Giảm từ 3U xuống 2U
 OTA_Firmware_Update<> ota;
 
@@ -129,7 +129,7 @@ SemaphoreHandle_t serialMutex = NULL;
 SemaphoreHandle_t tbMutex = NULL; // Thêm mutex cho ThingsBoard
 TaskHandle_t ThingsBoard_Task_Handle = NULL;
 TaskHandle_t Sensor_Task_Handle = NULL;
-TaskHandle_t Automation_Task_Handle = NULL;
+TaskHandle_t Auto_Light_Handle = NULL;
 // Status flags
 bool currentFWSent = false;
 bool updateRequestSent = false;
@@ -141,15 +141,29 @@ bool tbConnected = false;
 // Device state
 volatile bool fanState = false;
 volatile bool lightState = false;
-
+volatile bool lightAuto = false;
+volatile float LIGHT_AUTO_THRESHOLD = 30.0f; // Giảm từ 50.0f xuống 30.0f
+volatile uint64_t startTime = 0.0f;
+volatile uint64_t endTime = 0.0f;
+volatile bool daily = 0.0f;
 // Attribute names
 constexpr const char Fan_STATE_ATTR[] = "sharedvalueFan";
 constexpr const char Light_STATE_ATTR[] = "sharedvalueLight";
-
-// Danh sách shared attributes để subscribe
-constexpr std::array<const char *, 2U> SHARED_ATTRIBUTES_LIST = {
+constexpr const char Light_AUTO[] = "Light_auto";
+constexpr const char Brightness_THRESHOLD[] = "Threshold_brightness";
+constexpr const char Start_TIME[] = "Start";
+constexpr const char End_TIME[] = "End";
+constexpr const char Daily[] = "Daily";
+// Danh sách shared attributes để subscribe và request
+constexpr std::array<const char *, MAX_ATTRIBUTES> SHARED_ATTRIBUTES_LIST = {
     Fan_STATE_ATTR,
     Light_STATE_ATTR};
+constexpr std::array<const char *, MAX_ATTRIBUTES_REQUEST> REQUEST_ATTRIBUTES_LIST = {
+    Light_AUTO,
+    Brightness_THRESHOLD,
+    Start_TIME,
+    End_TIME,
+    Daily};
 
 // Cấu trúc dữ liệu cảm biến
 struct SensorData
@@ -161,12 +175,11 @@ struct SensorData
   float current;
   float power;
   float energy;
-  uint32_t timestamp;
   bool valid; // Thêm trường để kiểm tra dữ liệu hợp lệ
 };
 
 // Biến toàn cục để lưu dữ liệu cảm biến gần nhất
-SensorData lastSensorData = {0, 0, 0, 0, 0, 0, 0, 0, false};
+SensorData lastSensorData = {0, 0, 0, 0, 0, 0, 0, false};
 
 // Safe serial print function
 void safeSerialPrintln(const char *message)
@@ -219,7 +232,7 @@ void processSetValueFan(const JsonVariantConst &data, JsonDocument &response)
 void processSetValueLight(const JsonVariantConst &data, JsonDocument &response)
 {
   lightState = data.as<bool>();
-  digitalWrite(LIGHT_PIN, lightState ? HIGH : LOW);
+  digitalWrite(LIGHT_PIN, lightState ? LOW : HIGH);
 
   safeSerialPrintf("Received RPC setValueLight: %d\n", lightState ? 1 : 0);
 
@@ -254,14 +267,42 @@ void processSharedAttributes(const JsonObjectConst &data)
     {
       fanState = it->value().as<bool>();
       digitalWrite(FAN_PIN, fanState ? HIGH : LOW);
-
       safeSerialPrintf("Updated fan state: %d\n", fanState ? 1 : 0);
     }
     else if (strcmp(key, "sharedvalueLight") == 0 && it->value().is<bool>())
     {
       lightState = it->value().as<bool>();
-      digitalWrite(LIGHT_PIN, lightState ? HIGH : LOW);
+      digitalWrite(LIGHT_PIN, lightState ? LOW : HIGH);
       safeSerialPrintf("Updated light state: %d\n", lightState ? 1 : 0);
+    }
+    else if (strcmp(key, "Light_auto") == 0 && it->value().is<bool>())
+    {
+      lightAuto = it->value().as<bool>();
+      safeSerialPrintf("Received Light_auto: %d\n", lightAuto ? 1 : 0);
+    }
+    else if (strcmp(key, "Threshold_brightness") == 0 && it->value().is<float>())
+    {
+      LIGHT_AUTO_THRESHOLD = it->value().as<float>();
+      safeSerialPrintf("Received Threshold_brightness: %f\n", LIGHT_AUTO_THRESHOLD);
+    }
+    else if  (strcmp(key, "Start") == 0 && it ->value().is<uint64_t>())
+    {
+      startTime = it->value().as<uint64_t>();
+      safeSerialPrintf("Received Start: %f\n", startTime);
+    }
+    else if (strcmp(key, "End") == 0 && it->value().is<uint64_t>())
+    {
+      endTime = it->value().as<uint64_t>();
+      safeSerialPrintf("Received End: %f\n", endTime);
+    }
+    else if (strcmp(key, "Daily") == 0 && it->value().is<bool>())
+    {
+      daily = it->value().as<bool>();
+      safeSerialPrintf("Received Daily: %d\n", daily ? 1 : 0);
+    }
+    else
+    {
+      safeSerialPrintf("Unknown attribute: %s\n", key);
     }
   }
   isConnectingTB = true;
@@ -277,12 +318,11 @@ const Shared_Attribute_Callback<MAX_ATTRIBUTES> attributes_callback(
     SHARED_ATTRIBUTES_LIST.cbegin(),
     SHARED_ATTRIBUTES_LIST.cend());
 
-// const Attribute_Request_Callback<MAX_ATTRIBUTES> attribute_shared_request_callback(
-//     &processSharedAttributes,
-//     REQUEST_TIMEOUT_MICROSECONDS,
-//     &requestTimedOut,
-//     SHARED_ATTRIBUTES_LIST
-// );
+const Attribute_Request_Callback<MAX_ATTRIBUTES_REQUEST> attribute_shared_request_callback(
+    &processSharedAttributes,
+    REQUEST_TIMEOUT_MICROSECONDS,
+    &requestTimedOut,
+    REQUEST_ATTRIBUTES_LIST);
 
 // WiFi connection management
 bool connectToWiFi()
@@ -420,7 +460,7 @@ void update_starting_callback()
   if (Sensor_Task_Handle != NULL)
   {
     vTaskSuspend(Sensor_Task_Handle);
-    vTaskSuspend(Automation_Task_Handle);
+    vTaskSuspend(Auto_Light_Handle);
   }
 
   // Hủy đăng ký RPC để tránh nhận RPC call trong quá trình OTA
@@ -455,6 +495,12 @@ void finished_callback(const bool &success)
     if (Sensor_Task_Handle != NULL)
     {
       vTaskResume(Sensor_Task_Handle);
+    }
+
+    // Khôi phục tự động bật/tắt đèn
+    if (Auto_Light_Handle != NULL)
+    {
+      vTaskResume(Auto_Light_Handle);
     }
 
     // Đăng ký lại RPC nếu cập nhật OTA thất bại
@@ -566,7 +612,7 @@ void Sensor_Task(void *pvParameters)
     if (dht_err == SimpleDHTErrSuccess && !isnan(temperature) && !isnan(humidity))
     {
       safeSerialPrintf("Read Sensors -> Temp: %.2f°C, Humi: %.2f%%, Light: %.2f%%, Voltage: %.2fV, Current: %.2fA, Power: %.2fW, Energy: %.2fWh\n",
-                         temperature, humidity, brightness, voltage, current, power, energy);
+                       temperature, humidity, brightness, voltage, current, power, energy);
       SensorData data = {temperature, humidity, brightness, voltage, current, power, energy};
 
       // Gửi dữ liệu vào hàng đợi
@@ -598,7 +644,7 @@ void ThingsBoard_Task(void *pvParameters)
 {
   uint32_t previousTelemetrySend = 0;
   uint32_t previousOTAcheck = 0;
-
+  uint32_t previousSchedulecheck = 0;
   while (true)
   {
     // Kiểm tra và kết nối WiFi
@@ -740,14 +786,82 @@ void ThingsBoard_Task(void *pvParameters)
         xSemaphoreGive(tbMutex);
       }
     }
-
+    if (millis() - previousSchedulecheck > AUTOLIGHT_CHECK_INTERVAL)
+    {
+      previousSchedulecheck = millis();
+      bool requestSuccess = attr_request.Shared_Attributes_Request(attribute_shared_request_callback);
+    }
     // Ngủ ngắn để nhả CPU cho các tác vụ khác
     vTaskDelay(pdMS_TO_TICKS(200));
   }
 }
 
-void task_automation(void *pvParameters)
+void Auto_Light(void *pvParameters)
 {
+  // Đặt độ phân giải ADC cao hơn cho độ chính xác
+  analogReadResolution(12);
+  uint32_t lastLightCheck = 0;
+  bool below_threshold = false;
+  float light_brightness = 0.0f;
+  // Đợi một chút trước khi bắt đầu
+  vTaskDelay(pdMS_TO_TICKS(2000));
+  while (true)
+  {
+    // Kiểm tra trạng thái tự động bật/tắt đèn
+    if (lightAuto && millis() - lastLightCheck >= LIGHT_AUTO_INTERVAL)
+    {
+      // Nếu tự động, kiểm tra độ sáng và điều chỉnh đèn
+      int lightLevel = analogRead(LIGHT_SENSOR_PIN);
+      float brightness = (float)lightLevel / 4095.0 * 100 - light_brightness; // Chuyển đổi giá trị ADC sang % (0-3.3V)
+      safeSerialPrintf("Light level: %.2f%%\n", brightness);
+      if (brightness < LIGHT_AUTO_THRESHOLD)
+      {
+        // Nếu độ sáng thấp hơn ngưỡng, bật đèn
+        if (!lightState)
+        {
+          lightState = true;
+          digitalWrite(LIGHT_PIN, LOW);
+          safeSerialPrintln("Light turned ON");
+          if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+          {
+            tb.sendAttributeData("sharedvalueLight", lightState);
+            safeSerialPrintln("Light state sent to ThingsBoard");
+            xSemaphoreGive(tbMutex);
+          }
+          else
+          {
+            safeSerialPrintln("Failed to acquire ThingsBoard mutex for light state");
+          }
+        }
+        int lightLevel = analogRead(LIGHT_SENSOR_PIN);
+        light_brightness = (float)lightLevel / 4095.0 * 100 - brightness; // Chuyển đổi giá trị ADC sang % (0-3.3V)
+        vTaskDelay(pdMS_TO_TICKS(5000));                                  // Đợi 5 giây để tránh nhấp nháy đèn
+      }
+      else
+      {
+        // Nếu độ sáng cao hơn ngưỡng, tắt đèn
+        if (lightState)
+        {
+          lightState = false;
+          light_brightness = 0.0f;
+          digitalWrite(LIGHT_PIN, HIGH);
+          safeSerialPrintln("Light turned OFF");
+          if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+          {
+            tb.sendAttributeData("sharedvalueLight", lightState);
+            safeSerialPrintln("Light state sent to ThingsBoard");
+            xSemaphoreGive(tbMutex);
+          }
+          else
+          {
+            safeSerialPrintln("Failed to acquire ThingsBoard mutex for light state");
+          }
+        }
+        vTaskDelay(pdMS_TO_TICKS(5000)); // Đợi 5 giây để tránh nhấp nháy đèn
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Thời gian chờ giữa các lần kiểm tra
+  }
 }
 
 void setup()
@@ -764,7 +878,7 @@ void setup()
   pinMode(FAN_PIN, OUTPUT);
   pinMode(LIGHT_PIN, OUTPUT);
   digitalWrite(FAN_PIN, LOW);
-  digitalWrite(LIGHT_PIN, LOW);
+  digitalWrite(LIGHT_PIN, HIGH);
 
   // Khởi tạo RTOS resources
   sensorQueue = xQueueCreate(5, sizeof(SensorData)); // Giảm kích thước queue từ 10 xuống 5
@@ -785,7 +899,7 @@ void setup()
 
   // Tạo task cho ThingsBoard
   xTaskCreate(Sensor_Task, "SensorTask", 4096, NULL, 1, &Sensor_Task_Handle);
-  xTaskCreate(task_automation, "AutomationTask", 4096, NULL, 1, &Automation_Task_Handle);
+  xTaskCreate(Auto_Light, "AutomationTask", 4096, NULL, 1, &Auto_Light_Handle);
   xTaskCreate(ThingsBoard_Task, "TBTask", 8192, NULL, 1, &ThingsBoard_Task_Handle);
   // Đảm bảo task được tạo thành công
   if (ThingsBoard_Task_Handle == NULL || Sensor_Task_Handle == NULL)
