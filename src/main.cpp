@@ -17,7 +17,7 @@
 // Cấu hình kết nối
 #define ENCRYPTED false
 constexpr char CURRENT_FIRMWARE_TITLE[] = "DA_TKLL";
-constexpr char CURRENT_FIRMWARE_VERSION[] = "1.0.0";
+constexpr char CURRENT_FIRMWARE_VERSION[] = "2.0.0";
 
 // Cấu hình OTA
 constexpr uint8_t FIRMWARE_FAILURE_RETRIES = 5U; // Giảm từ 12 xuống 5 để tránh lãng phí bộ nhớ
@@ -61,11 +61,11 @@ constexpr uint16_t THINGSBOARD_PORT = 1883U;
 // Các thông số cấu hình
 constexpr uint16_t MAX_MESSAGE_SIZE = 256U; // Giảm từ 512 xuống 256
 constexpr size_t MAX_ATTRIBUTES = 7U;
-constexpr size_t MAX_ATTRIBUTES_REQUEST = 5U;                    // Giảm từ 3 xuống 2
+constexpr size_t MAX_ATTRIBUTES_REQUEST = 7U;                    // Giảm từ 3 xuống 2
 constexpr uint64_t REQUEST_TIMEOUT_MICROSECONDS = 3000U * 1000U; // Giảm từ 5000 xuống 3000
 constexpr int16_t TELEMETRY_SEND_INTERVAL = 10000U;              // Tăng từ 5000 lên 10000 để giảm tần suất gửi dữ liệu
 constexpr uint32_t OTA_CHECK_INTERVAL = 60000U;                  // Tăng từ 30000 lên 60000
-constexpr uint32_t AUTOLIGHT_CHECK_INTERVAL = 15000U;            // Tăng từ 5000 lên 10000 để giảm tần suất gửi dữ liệu
+constexpr uint32_t ATTRIBUTE_CHECK_INTERVAL = 20000U;            // Tăng từ 5000 lên 10000 để giảm tần suất gửi dữ liệu
 constexpr uint32_t SCHEDULE_CHECK_INTERVAL = 15000U;             // Tăng từ 5000 lên 10000 để giảm tần suất gửi dữ liệu
 constexpr uint32_t SENSOR_READ_INTERVAL = 5000U;                 // Xác định rõ khoảng thời gian đọc cảm biến
 constexpr uint32_t LIGHT_AUTO_INTERVAL = 2000U;                  // Tăng từ 10000 lên 30000 để giảm tần suất gửi dữ liệu
@@ -116,7 +116,7 @@ WiFiClient espClient;
 Arduino_MQTT_Client mqttClient(espClient);
 
 // Khởi tạo các API
-Server_Side_RPC<2U, 3U> rpc; // Giảm từ 3U, 5U xuống 2U, 3U để tiết kiệm bộ nhớ
+Server_Side_RPC<2U, 5U> rpc; // Giảm từ 3U, 5U xuống 2U, 3U để tiết kiệm bộ nhớ
 Attribute_Request<2U, MAX_ATTRIBUTES_REQUEST> attr_request;
 Shared_Attribute_Update<2U, MAX_ATTRIBUTES> shared_update; // Giảm từ 3U xuống 2U
 OTA_Firmware_Update<> ota;
@@ -137,8 +137,9 @@ PZEM004Tv30 pzem(PZEM_SERIAL, RXD2, TXD2);
 // RTOS resources
 QueueHandle_t sensorQueue = NULL;
 SemaphoreHandle_t serialMutex = NULL;
-SemaphoreHandle_t tbMutex = NULL;   // Thêm mutex cho ThingsBoard
-SemaphoreHandle_t shareTime = NULL; // Thêm mutex cho WiFi
+SemaphoreHandle_t tbMutex = NULL;    // Thêm mutex cho ThingsBoard
+SemaphoreHandle_t fanMutex = NULL;   // Mutex cho fan
+SemaphoreHandle_t lightMutex = NULL; // Mutex cho light
 TaskHandle_t ThingsBoard_Task_Handle = NULL;
 TaskHandle_t Sensor_Task_Handle = NULL;
 TaskHandle_t Auto_Light_Handle = NULL;
@@ -151,7 +152,7 @@ TaskHandle_t Motion_Detection_Task_Handle = NULL;
 bool currentFWSent = false;
 bool updateRequestSent = false;
 bool isUpdatingOTA = false;
-bool isConnectingTB = false;
+bool isConnectingTB = false; // Xác định xem đã hoàn tất việc kết nối với ThingsBoard hay chưa (gồm đăng kí rpc và shared attributes)
 bool wifiConnected = false;
 bool tbConnected = false;
 bool manual_mode_light = false;
@@ -181,8 +182,7 @@ constexpr const char Daily[] = "Daily";
 // Danh sách shared attributes để subscribe và request
 constexpr std::array<const char *, MAX_ATTRIBUTES> SHARED_ATTRIBUTES_LIST = {
     Fan_STATE_ATTR,
-    Light_STATE_ATTR};
-constexpr std::array<const char *, MAX_ATTRIBUTES_REQUEST> REQUEST_ATTRIBUTES_LIST = {
+    Light_STATE_ATTR,
     Light_AUTO,
     Brightness_THRESHOLD,
     Start_TIME,
@@ -237,15 +237,66 @@ void safeSerialPrintf(const char *format, ...)
   }
 }
 
+void controlFan(bool state)
+{
+  if (fanMutex != NULL && xSemaphoreTake(fanMutex, pdMS_TO_TICKS(500)) == pdTRUE && isConnectingTB)
+  {
+    if (fanState != state)
+    {
+      fanState = state;
+      digitalWrite(FAN_PIN, state ? HIGH : LOW);
+      if (tbConnected && isConnectingTB)
+      {
+        if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(500)) == pdTRUE)
+        {
+          tb.sendAttributeData("sharedvalueFan", fanState);
+          safeSerialPrintf("Fan state sent to Thingsboard: %s\n", fanState ? "ON" : "OFF");
+        }
+        xSemaphoreGive(tbMutex);
+      }
+    }
+    xSemaphoreGive(fanMutex);
+  }
+  else
+  {
+    safeSerialPrintln("Failed to acquire fan mutex");
+  }
+}
+
+void controlLight(bool state)
+{
+  if (lightMutex != NULL && xSemaphoreTake(lightMutex, pdMS_TO_TICKS(500)) == pdTRUE && isConnectingTB)
+  {
+    if (lightState != state)
+    {
+      lightState = state;
+      digitalWrite(LIGHT_PIN, state ? LOW : HIGH);
+      if (tbConnected && isConnectingTB)
+      {
+        if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(500)) == pdTRUE)
+        {
+          tb.sendAttributeData("sharedvalueLight", lightState);
+          safeSerialPrintf("Light state sent to Thingsboard: %s\n", lightState ? "ON" : "OFF");
+        }
+        xSemaphoreGive(tbMutex);
+      }
+    }
+    xSemaphoreGive(lightMutex);
+  }
+  else
+  {
+    safeSerialPrintln("Failed to acquire light mutex");
+  }
+}
+
 // RPC callback cho setValueFan
 void processSetValueFan(const JsonVariantConst &data, JsonDocument &response)
 {
-  fanState = data.as<bool>();
-  digitalWrite(FAN_PIN, fanState ? HIGH : LOW);
+  bool state = data.as<bool>();
 
-  safeSerialPrintf("Received RPC setValueFan: %d\n", fanState ? 1 : 0);
+  safeSerialPrintf("Received RPC setValueFan: %d\n", state ? 1 : 0);
 
-  tb.sendAttributeData("sharedvalueFan", fanState);
+  controlFan(state);
 
   StaticJsonDocument<32> response_doc;
   response_doc["newFanState"] = fanState;
@@ -255,12 +306,11 @@ void processSetValueFan(const JsonVariantConst &data, JsonDocument &response)
 // RPC callback cho setValueLight
 void processSetValueLight(const JsonVariantConst &data, JsonDocument &response)
 {
-  lightState = data.as<bool>();
-  digitalWrite(LIGHT_PIN, lightState ? LOW : HIGH);
+  bool state = data.as<bool>();
 
-  safeSerialPrintf("Received RPC setValueLight: %d\n", lightState ? 1 : 0);
+  safeSerialPrintf("Received RPC setValueLight: %d\n", state ? 1 : 0);
 
-  tb.sendAttributeData("sharedvalueLight", lightState);
+  controlLight(state);
 
   StaticJsonDocument<32> response_doc;
   response_doc["newLightState"] = lightState;
@@ -280,7 +330,7 @@ void processSharedAttributes(const JsonObjectConst &data)
     safeSerialPrintln("Received null shared attributes data");
     return;
   }
-
+  safeSerialPrintln("Processing shared attributes...");
   for (auto it = data.begin(); it != data.end(); ++it)
   {
     const char *key = it->key().c_str();
@@ -289,14 +339,30 @@ void processSharedAttributes(const JsonObjectConst &data)
 
     if (strcmp(key, "sharedvalueFan") == 0 && it->value().is<bool>())
     {
-      fanState = it->value().as<bool>();
-      digitalWrite(FAN_PIN, fanState ? HIGH : LOW);
+      if (fanMutex != NULL && xSemaphoreTake(fanMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+      {
+        fanState = it->value().as<bool>();
+        digitalWrite(FAN_PIN, fanState ? HIGH : LOW);
+        xSemaphoreGive(fanMutex);
+      }
+      else
+      {
+        safeSerialPrintln("Failed to acquire fan mutex");
+      }
       safeSerialPrintf("Updated fan state: %d\n", fanState ? 1 : 0);
     }
     else if (strcmp(key, "sharedvalueLight") == 0 && it->value().is<bool>())
     {
-      lightState = it->value().as<bool>();
-      digitalWrite(LIGHT_PIN, lightState ? LOW : HIGH);
+      if (lightMutex != NULL && xSemaphoreTake(lightMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+      {
+        lightState = it->value().as<bool>();
+        digitalWrite(LIGHT_PIN, lightState ? LOW : HIGH);
+        xSemaphoreGive(lightMutex);
+      }
+      else
+      {
+        safeSerialPrintln("Failed to acquire light mutex");
+      }
       safeSerialPrintf("Updated light state: %d\n", lightState ? 1 : 0);
     }
     else if (strcmp(key, "Light_auto") == 0 && it->value().is<bool>())
@@ -329,6 +395,7 @@ void processSharedAttributes(const JsonObjectConst &data)
       safeSerialPrintf("Unknown attribute: %s\n", key);
     }
   }
+  safeSerialPrintln("Finished processing shared attributes");
   isConnectingTB = true;
 }
 
@@ -342,11 +409,11 @@ const Shared_Attribute_Callback<MAX_ATTRIBUTES> attributes_callback(
     SHARED_ATTRIBUTES_LIST.cbegin(),
     SHARED_ATTRIBUTES_LIST.cend());
 
-const Attribute_Request_Callback<MAX_ATTRIBUTES_REQUEST> attribute_shared_request_callback(
+const Attribute_Request_Callback<MAX_ATTRIBUTES> attribute_shared_request_callback(
     &processSharedAttributes,
     REQUEST_TIMEOUT_MICROSECONDS,
     &requestTimedOut,
-    REQUEST_ATTRIBUTES_LIST);
+    SHARED_ATTRIBUTES_LIST);
 
 // WiFi connection management
 bool connectToWiFi()
@@ -444,7 +511,7 @@ bool connectToThingsBoard()
     {
       bool rpcSuccess = rpc.RPC_Subscribe(rpcCallbacks.cbegin(), rpcCallbacks.cend());
       bool sharedSuccess = shared_update.Shared_Attributes_Subscribe(attributes_callback);
-      // bool requestSuccess = attr_request.Shared_Attributes_Request(attribute_shared_request_callback);
+      bool requestSuccess = attr_request.Shared_Attributes_Request(attribute_shared_request_callback);
       xSemaphoreGive(tbMutex);
 
       if (!rpcSuccess)
@@ -457,10 +524,10 @@ bool connectToThingsBoard()
         safeSerialPrintln("Failed to subscribe for shared attributes");
         return false;
       }
-      // if (!requestSuccess) {
-      //   safeSerialPrintln("Failed to request shared attributes");
-      //   return false;
-      // }
+      if (!requestSuccess) {
+        safeSerialPrintln("Failed to request shared attributes");
+        return false;
+      }
 
       safeSerialPrintln("Successfully subscribed to ThingsBoard services");
     }
@@ -491,10 +558,11 @@ void update_starting_callback()
     vTaskSuspend(Motion_Detection_Task_Handle);
   }
 
-  // Hủy đăng ký RPC để tránh nhận RPC call trong quá trình OTA
+  // Hủy đăng ký RPC và Attribute để tránh nhận RPC call hoặc Attribute value update trong quá trình OTA
   if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
   {
     rpc.RPC_Unsubscribe();
+    shared_update.Shared_Attributes_Unsubscribe();
     safeSerialPrintln("RPC unsubscribed for OTA update");
     xSemaphoreGive(tbMutex);
   }
@@ -550,6 +618,8 @@ void finished_callback(const bool &success)
     if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
     {
       bool rpcSuccess = rpc.RPC_Subscribe(rpcCallbacks.cbegin(), rpcCallbacks.cend());
+      bool sharedSuccess = shared_update.Shared_Attributes_Subscribe(attributes_callback);
+
       if (rpcSuccess)
       {
         safeSerialPrintln("RPC resubscribed after failed OTA update");
@@ -558,6 +628,15 @@ void finished_callback(const bool &success)
       {
         safeSerialPrintln("Failed to resubscribe RPC after failed OTA update");
       }
+      if (sharedSuccess)
+      {
+        safeSerialPrintln("Shared attributes resubscribed after failed OTA update");
+      }
+      else
+      {
+        safeSerialPrintln("Failed to resubscribe shared attributes after failed OTA update");
+      }
+
       xSemaphoreGive(tbMutex);
     }
     else
@@ -723,7 +802,7 @@ void ThingsBoard_Task(void *pvParameters)
     }
 
     // Gửi telemetry nếu có dữ liệu mới và đủ thời gian
-    if (newDataReceived && !isUpdatingOTA && tb.connected() &&
+    if (newDataReceived && !isUpdatingOTA &&
         (millis() - previousTelemetrySend > TELEMETRY_SEND_INTERVAL))
     {
 
@@ -805,34 +884,27 @@ void ThingsBoard_Task(void *pvParameters)
     }
 
     // Xử lý các sự kiện ThingsBoard
-    if (tb.connected())
-    {
-      if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
-      {
-        tb.loop();
-        xSemaphoreGive(tbMutex);
-      }
-    }
-    else
-    {
-      // Nếu kết nối đã mất, cập nhật trạng thái và thử lại
-      if (tbConnected)
-      {
-        safeSerialPrintln("ThingsBoard connection lost, will reconnect...");
-        tbConnected = false;
-      }
+    tb.loop();
 
-      // Ngắt kết nối hiện tại để chuẩn bị kết nối lại
-      if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
-      {
-        tb.disconnect();
-        xSemaphoreGive(tbMutex);
-      }
-    }
-    if (millis() - previousSchedulecheck > AUTOLIGHT_CHECK_INTERVAL && isUpdatingOTA == false)
+    if (millis() - previousSchedulecheck > ATTRIBUTE_CHECK_INTERVAL && isUpdatingOTA == false && isConnectingTB)
     {
       previousSchedulecheck = millis();
-      bool requestSuccess = attr_request.Shared_Attributes_Request(attribute_shared_request_callback);
+      if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+      {
+        // Gửi yêu cầu shared attributes
+        safeSerialPrintln("Requesting shared attributes...");
+        // Gửi yêu cầu shared attributes
+        bool requestSuccess = attr_request.Shared_Attributes_Request(attribute_shared_request_callback);
+        if (!requestSuccess)
+        {
+          safeSerialPrintln("Failed to request shared attributes");
+        }
+        xSemaphoreGive(tbMutex);
+      }
+      else
+      {
+        safeSerialPrintln("Failed to acquire ThingsBoard mutex for attribute request");
+      }
     }
     // Ngủ ngắn để nhả CPU cho các tác vụ khác
     vTaskDelay(pdMS_TO_TICKS(200));
@@ -844,7 +916,7 @@ void Auto_Light(void *pvParameters)
   // Đặt độ phân giải ADC cao hơn cho độ chính xác
   vTaskDelay(pdMS_TO_TICKS(2000));
   analogReadResolution(12);
-  uint32_t lastLightCheck = 0;
+  uint32_t lastLightCheck = millis();
   bool below_threshold = false;
   float light_brightness = 0.0f;
   // Đợi một chút trước khi bắt đầu
@@ -862,22 +934,7 @@ void Auto_Light(void *pvParameters)
     {
       safeSerialPrintln("On time to turn on light");
       // Nếu độ sáng thấp hơn ngưỡng, bật đèn
-      if (!lightState)
-      {
-        lightState = true;
-        digitalWrite(LIGHT_PIN, LOW);
-        safeSerialPrintln("Light turned ON");
-        if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
-        {
-          tb.sendAttributeData("sharedvalueLight", lightState);
-          safeSerialPrintln("Light state sent to ThingsBoard");
-          xSemaphoreGive(tbMutex);
-        }
-        else
-        {
-          safeSerialPrintln("Failed to acquire ThingsBoard mutex for light state");
-        }
-      }
+      controlLight(true);
       vTaskDelay(pdMS_TO_TICKS(5000)); // Đợi 5 giây để tránh nhấp nháy đèn
       continue;
     }
@@ -900,6 +957,7 @@ void Auto_Light(void *pvParameters)
       {
         // Nếu độ sáng cao hơn ngưỡng, tắt đèn
         sastify_brightness = false;
+        light_brightness = 0.0f;
         vTaskDelay(pdMS_TO_TICKS(5000)); // Đợi 5 giây để tránh nhấp nháy đèn
       }
       lastLightCheck = millis();
@@ -942,32 +1000,18 @@ void Schedule_Task(void *pvParameters)
     }
     uint64_t currentTime = getTimestampMillis();
 
-    if (daily)
+    if (currentTime >= startTime && currentTime <= endTime)
     {
-      if (currentTime >= startTime && currentTime <= endTime)
-      {
-        onTime = true;
-        safeSerialPrintln("Auto light ON");
-      }
-      else
-      {
-        onTime = false;
-        safeSerialPrintln("Auto light OFF");
-      }
+      onTime = true;
+      safeSerialPrintln("Auto light ON");
     }
-    else
+    else if (onTime)
     {
-      if (currentTime >= startTime && currentTime <= endTime)
-      {
-        onTime = true;
-        safeSerialPrintln("Auto light ON");
-      }
-      else
-      {
-        onTime = false;
-        safeSerialPrintln("Auto light OFF");
-      }
+      safeSerialPrintln("Auto light OFF");
+      onTime = false;
+      controlLight(false);
     }
+
     vTaskDelay(pdMS_TO_TICKS(10000)); // Thời gian chờ giữa các lần kiểm tra
   }
 }
@@ -975,6 +1019,7 @@ void Schedule_Task(void *pvParameters)
 void TaskButtonFan(void *pvParameters)
 {
   pinMode(BUTTON_FAN_PIN, INPUT_PULLUP);
+  bool state = false;
   while (1)
   {
     bool reading = digitalRead(BUTTON_FAN_PIN);
@@ -985,17 +1030,19 @@ void TaskButtonFan(void *pvParameters)
       if (manual_mode_fan)
       {
         safeSerialPrintln("Fan is in manual mode");
-        fanState = !fanState;
-        digitalWrite(FAN_PIN, fanState ? HIGH : LOW);
+        if (fanMutex != NULL && xSemaphoreTake(fanMutex, pdMS_TO_TICKS(500)) == pdTRUE)
+        {
+          state = !fanState;
+          xSemaphoreGive(fanMutex);
+        }
+        else
+        {
+          safeSerialPrintln("Failed to acquire fan mutex");
+        }
+        controlFan(state);
+
         safeSerialPrint("Button pressed: Fan turned");
         safeSerialPrintln(fanState ? "ON" : "OFF");
-        // Gửi trạng thái quạt lên ThingsBoard
-        if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
-        {
-          tb.sendAttributeData("sharedvalueFan", fanState);
-          safeSerialPrintln("Fan state sent to ThingsBoard");
-          xSemaphoreGive(tbMutex);
-        }
       }
       else
       {
@@ -1012,6 +1059,7 @@ void TaskButtonFan(void *pvParameters)
 void TaskButtonLight(void *pvParameters)
 {
   pinMode(BUTTON_LIGHT_PIN, INPUT_PULLUP);
+  bool state = false;
   while (1)
   {
     bool reading = digitalRead(BUTTON_LIGHT_PIN);
@@ -1022,17 +1070,19 @@ void TaskButtonLight(void *pvParameters)
       {
         safeSerialPrintln("Light is in manual mode");
         // Khi nhấn nút, đổi trạng thái quạt
-        lightState = !lightState;
-        digitalWrite(LIGHT_PIN, lightState ? LOW : HIGH);
+        if (lightMutex != NULL && xSemaphoreTake(lightMutex, pdMS_TO_TICKS(500)) == pdTRUE)
+        {
+          state = !lightState;
+          xSemaphoreGive(lightMutex);
+        }
+        else
+        {
+          safeSerialPrintln("Failed to acquire light mutex");
+        }
+        controlLight(state);
+
         safeSerialPrint("Button pressed: Light turned");
         safeSerialPrintln(lightState ? "ON" : "OFF");
-        // Gửi trạng thái quạt lên ThingsBoard
-        if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
-        {
-          tb.sendAttributeData("sharedvalueLight", lightState);
-          safeSerialPrintln("Light state sent to ThingsBoard");
-          xSemaphoreGive(tbMutex);
-        }
       }
       else
       {
@@ -1057,22 +1107,7 @@ void Motion_Detection_Task(void *pvParameters)
     if (motion && lightAuto)
     {
       safeSerialPrintln("Motion detected");
-      if (!lightState && sastify_brightness)
-      {
-        lightState = true;
-        digitalWrite(LIGHT_PIN, LOW);
-        safeSerialPrintln("Light turned ON");
-        if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
-        {
-          tb.sendAttributeData("sharedvalueLight", lightState);
-          safeSerialPrintln("Light state sent to ThingsBoard");
-          xSemaphoreGive(tbMutex);
-        }
-        else
-        {
-          safeSerialPrintln("Failed to acquire ThingsBoard mutex for light state");
-        }
-      }
+      controlLight(true);
       lastcheck = millis();
     }
     else if (millis() - lastcheck >= 10000 && lightAuto)
@@ -1080,23 +1115,7 @@ void Motion_Detection_Task(void *pvParameters)
       lastcheck = millis();
 
       Serial.println("Motion stopped");
-
-      if (lightState)
-      {
-        lightState = false;
-        digitalWrite(LIGHT_PIN, HIGH);
-        safeSerialPrintln("Light turned OFF");
-        if (tbMutex != NULL && xSemaphoreTake(tbMutex, pdMS_TO_TICKS(1000)) == pdTRUE)
-        {
-          tb.sendAttributeData("sharedvalueLight", lightState);
-          safeSerialPrintln("Light state sent to ThingsBoard");
-          xSemaphoreGive(tbMutex);
-        }
-        else
-        {
-          safeSerialPrintln("Failed to acquire ThingsBoard mutex for light state");
-        }
-      }
+      controlLight(false);
     }
     vTaskDelay(100 / portTICK_PERIOD_MS);
   }
@@ -1122,6 +1141,8 @@ void setup()
   sensorQueue = xQueueCreate(5, sizeof(SensorData)); // Giảm kích thước queue từ 10 xuống 5
   serialMutex = xSemaphoreCreateMutex();
   tbMutex = xSemaphoreCreateMutex(); // Mutex mới cho ThingsBoard
+  lightMutex = xSemaphoreCreateMutex();
+  fanMutex = xSemaphoreCreateMutex();
 
   if (!sensorQueue || !serialMutex || !tbMutex)
   {
@@ -1134,13 +1155,13 @@ void setup()
 
   // Kết nối WiFi ban đầu
   connectToWiFi();
-
+  connectToThingsBoard();
   // Tạo task cho ThingsBoard
-  xTaskCreate(Sensor_Task, "SensorTask", 4096, NULL, 1, &Sensor_Task_Handle);
-  xTaskCreate(ThingsBoard_Task, "TBTask", 8192, NULL, 1, &ThingsBoard_Task_Handle);
+  xTaskCreate(Sensor_Task, "SensorTask", 4096, NULL, 2, &Sensor_Task_Handle);
+  xTaskCreate(ThingsBoard_Task, "TBTask", 8192, NULL, 2, &ThingsBoard_Task_Handle);
   xTaskCreate(Auto_Light, "AutomationTask", 4096, NULL, 1, &Auto_Light_Handle);
-  xTaskCreate(Schedule_Task, "ScheduleTask", 8192, NULL, 1, &Schedule_Task_Handle);
-  xTaskCreate(TaskButtonFan, "ButtonFanTask", 2048, NULL, 1, &ButtonFan_Task_Handle);
+  xTaskCreate(Schedule_Task, "ScheduleTask", 8192, NULL, 2, &Schedule_Task_Handle);
+  xTaskCreate(TaskButtonFan, "ButtonFanTask", 2048, NULL, 2, &ButtonFan_Task_Handle);
   xTaskCreate(TaskButtonLight, "ButtonLightTask", 2048, NULL, 1, &ButtonLight_Task_Handle);
   xTaskCreate(Motion_Detection_Task, "MotionDetectionTask", 2048, NULL, 1, &Motion_Detection_Task_Handle);
   // Đảm bảo task được tạo thành công

@@ -4,3 +4,8 @@
 .vscode/launch.json
 .vscode/ipch
 .venv
+src/mainaddbutton.cpp
+src/main_AIconnect.cpp
+src/testtime.cpp
+src/testconnect.cpp
+src/main2.cpp
