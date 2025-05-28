@@ -29,3 +29,17 @@ This project utilizes PlatformIO to develop firmware for the YoloUNO board, base
 ## Configuration
 
 See `platformio.ini` for configuration options, including WiFi credentials and ThingsBoard connection details.  Refer to the [PlatformIO documentation](https://docs.platformio.org/page/platforms/espressif32.html) for more information.
+
+## ThingsBoard Rulechain Configuration
+
+Dự án này sử dụng hai file cấu hình rulechain cho ThingsBoard Cloud Server:
+
+- **root_rule_chain.json**: File cấu hình cho Rule Chain gốc (Root Rule Chain), chịu trách nhiệm xử lý luồng dữ liệu chính từ thiết bị, chuyển tiếp dữ liệu và các sự kiện đến các rulechain khác hoặc xử lý logic tổng thể.
+- **environmental_alert.json**: File cấu hình cho Rule Chain thông báo môi trường, dùng để phát hiện các điều kiện môi trường bất thường (ví dụ: nhiệt độ, độ ẩm vượt ngưỡng) và gửi thông báo đến người dùng.
+
+Bạn có thể import các file này vào ThingsBoard để thiết lập tự động xử lý và cảnh báo cho hệ thống Smart Home.
+
+## ThingsBoard Dashboard
+
+Bạn có thể giám sát và điều khiển thiết bị thông qua ThingsBoard Dashboard tại đây:  
+[Smart Home Dashboard](https://app.coreiot.io/dashboard/447e5710-e699-11ef-87b5-21bccf7d29d5?publicId=2f886da0-e3c4-11ef-ad09-515f790ed9df)
